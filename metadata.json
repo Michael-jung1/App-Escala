@@ -1,0 +1,6 @@
+{
+  "name": "Escala",
+  "description": "Escala de Acólitos, Coroinhas e Cerimoniários com importação automática de planilhas Excel, PDFs e documentos de escalas mensais",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

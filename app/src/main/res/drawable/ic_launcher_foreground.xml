@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Centered within 66dp safe zone (21 to 87) -->
+    <!-- Church building with cross & bell tower -->
+    <path
+        android:fillColor="#F6E7D0"
+        android:pathData="M54,25 L50,29 L58,29 Z" />
+    <path
+        android:fillColor="#E8C382"
+        android:pathData="M52,29 L52,24 L56,24 L56,29 L60,29 L60,32 L56,32 L56,38 L52,38 L52,32 L48,32 L48,29 Z" />
+    <path
+        android:fillColor="#F6E7D0"
+        android:pathData="M54,39 L35,51 L39,51 L39,81 L69,81 L69,51 L73,51 Z" />
+    <!-- Church Door Arch -->
+    <path
+        android:fillColor="#3D2916"
+        android:pathData="M49,81 L49,67 C49,64.2 51.2,62 54,62 C56.8,62 59,64.2 59,67 L59,81 Z" />
+    <!-- Rose Window -->
+    <path
+        android:fillColor="#D8A85E"
+        android:pathData="M54,54 m-4,0 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0" />
+    <!-- Calendar/Schedule accent badge in corner -->
+    <path
+        android:fillColor="#FFDB8B"
+        android:pathData="M65,63 L77,63 L77,75 L65,75 Z" />
+    <path
+        android:fillColor="#804B00"
+        android:pathData="M67,65 L75,65 L75,67 L67,67 Z M68,69 L70,69 L70,71 L68,71 Z M72,69 L74,69 L74,71 L72,71 Z M68,72 L70,72 L70,74 L68,74 Z" />
+</vector>
