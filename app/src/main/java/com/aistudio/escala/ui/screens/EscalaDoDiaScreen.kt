@@ -1,6 +1,7 @@
 package com.aistudio.escala.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -110,6 +111,11 @@ fun EscalaDoDiaScreen(
     var isFilterMenuExpanded by remember { mutableStateOf(false) }
 
     var dayDuties by remember { mutableStateOf<List<EscalacaoDia>?>(null) }
+    var fallbackDateServico by remember { mutableStateOf<String?>(null) }
+    var fallbackLocalDate by remember { mutableStateOf<LocalDate?>(null) }
+    var fallbackDuties by remember { mutableStateOf<List<EscalacaoDia>?>(null) }
+    var isFallbackActive by remember { mutableStateOf(false) }
+
     var isLoading by remember { mutableStateOf(false) }
     var collapsedChurches by remember { mutableStateOf<Set<String>>(emptySet()) }
 
@@ -139,11 +145,49 @@ fun EscalaDoDiaScreen(
         }
     }
 
-    fun loadScheduleForDate(dateServico: String) {
+    fun loadScheduleForDate(dateServico: String, targetDate: LocalDate?) {
         isLoading = true
         coroutineScope.launch {
             val duties = repository.getEscalaDoDia(dateServico)
             dayDuties = duties
+
+            // Regra Cenário B (Fallback):
+            // Se houver um usuário filtrado e neste dia o usuário NÃO estiver escalado,
+            // ou se a lista estiver vazia para ele, busca e exibe automaticamente a próxima escala futura.
+            if (activeUser.isNotBlank()) {
+                val userServesHere = duties.any { SearchUtils.correspondeBusca(it.pessoa, activeUser) }
+                if (!userServesHere) {
+                    val userDuties = repository.getEscalaPessoa(activeUser, apenasFuturas = false)
+                    val futureDuty = userDuties.filter { duty ->
+                        duty.localDate != null && (duty.localDate >= today)
+                    }.minByOrNull { it.localDate!! } ?: userDuties.filter { duty ->
+                        duty.localDate != null && (targetDate == null || duty.localDate > targetDate)
+                    }.minByOrNull { it.localDate!! } ?: userDuties.firstOrNull()
+
+                    if (futureDuty != null && futureDuty.data.isNotBlank()) {
+                        fallbackDateServico = futureDuty.data
+                        fallbackLocalDate = futureDuty.localDate
+                        fallbackDuties = repository.getEscalaDoDia(futureDuty.data)
+                        isFallbackActive = true
+                    } else {
+                        fallbackDateServico = null
+                        fallbackLocalDate = null
+                        fallbackDuties = null
+                        isFallbackActive = false
+                    }
+                } else {
+                    fallbackDateServico = null
+                    fallbackLocalDate = null
+                    fallbackDuties = null
+                    isFallbackActive = false
+                }
+            } else {
+                fallbackDateServico = null
+                fallbackLocalDate = null
+                fallbackDuties = null
+                isFallbackActive = false
+            }
+
             isLoading = false
         }
     }
@@ -177,10 +221,10 @@ fun EscalaDoDiaScreen(
             val userDuties = repository.getEscalaPessoa(activeUser, apenasFuturas = false)
             val userDates = userDuties.mapNotNull { it.localDate }.toSet()
             userSpecificDates = userDates
-            // Rule 1: Calendar highlights ONLY the days this specific person is scheduled!
+            // Regras de Renderização: Calendário destaca os dias em que o nome está escalado
             serviceDatesSet = userDates
 
-            // Auto-select their earliest upcoming date, or first date overall if not already on one of their days
+            // Auto-seleciona a próxima escala futura do usuário se o dia atual não for de escala dele
             val currentSelected = selectedLocalDate
             if (userDates.isNotEmpty() && (currentSelected == null || !userDates.contains(currentSelected))) {
                 val nextDate = userDates.filter { it >= today }.minOrNull() ?: userDates.minOrNull()
@@ -189,7 +233,7 @@ fun EscalaDoDiaScreen(
                     val match = dates.firstOrNull { it.localDate == nextDate }
                     val ds = match?.dataServico ?: ""
                     selectedDateServico = ds
-                    loadScheduleForDate(ds)
+                    loadScheduleForDate(ds, nextDate)
                     return@LaunchedEffect
                 }
             }
@@ -204,7 +248,7 @@ fun EscalaDoDiaScreen(
         val match = dates.firstOrNull { it.localDate == initialDateObj }
         val dateServico = match?.dataServico ?: "Domingo 06"
         selectedDateServico = dateServico
-        loadScheduleForDate(dateServico)
+        loadScheduleForDate(dateServico, initialDateObj)
     }
 
     val isSelectedDatePast = selectedLocalDate?.let { DateUtils.isDataPassada(it, today) } ?: false
@@ -330,10 +374,11 @@ fun EscalaDoDiaScreen(
                     val match = availableDates.firstOrNull { it.localDate == pickedDate }
                     if (match != null) {
                         selectedDateServico = match.dataServico
-                        loadScheduleForDate(match.dataServico)
+                        loadScheduleForDate(match.dataServico, pickedDate)
                     } else {
                         selectedDateServico = ""
                         dayDuties = emptyList()
+                        loadScheduleForDate("", pickedDate)
                     }
                 }
             )
@@ -448,95 +493,30 @@ fun EscalaDoDiaScreen(
         } else {
             val duties = dayDuties ?: emptyList()
 
-            // Strict Rule 1: When user search is active, ONLY duties with searched name are shown.
-            // If the searched user is not present on this day, ALL other scales on this day MUST be hidden completely.
+            // Regras de Renderização do Calendário e Lista Inferior (Filtro por Nome):
+            // 1. Filtragem e Destaque por Local (Igrejas): Ao pesquisar um nome (ex: "Michael"), o sistema deve exibir a escala completa (mostrando todos os integrantes) apenas das igrejas onde o nome pesquisado está escalado. Dentro dessa escala completa, aplique um destaque visual (highlight) especificamente no nome pesquisado.
+            // 2. Ocultação Condicional de Locais: Se houver uma escala para uma igreja onde o nome pesquisado não está presente, a escala inteira dessa igreja específica deve ser ocultada da interface.
+            // 3. Comportamento da Lista (Abaixo do Calendário):
+            //    - Cenário A (Data com escala selecionada): Quando o usuário clicar em um dia no calendário que contenha uma escala para o nome pesquisado, a lista inferior deve exibir a escala completa de todas as igrejas onde a pessoa servirá naquele dia exato.
+            //    - Cenário B (Fallback - Data sem escala ou Dia Atual): Se o dia selecionado for o "dia de hoje" (e o usuário não estiver escalado) ou se for selecionado um dia qualquer sem escala para aquele nome, a lista não deve ficar vazia. Ela deve buscar e exibir automaticamente a próxima escala futura em que o nome pesquisado irá servir.
             if (activeUser.isNotBlank()) {
                 val matchingUserDuties = duties.filter {
                     SearchUtils.correspondeBusca(it.pessoa, activeUser)
                 }
 
-                if (matchingUserDuties.isEmpty()) {
-                    // Searched person is NOT present on this day: hide ALL other duties, show notice
-                    item {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("empty_user_schedule_day_card"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.EventBusy,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(36.dp)
-                                )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = "$activeUser não está escalado(a) nesta data",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Nenhuma função atribuída a este nome em ${selectedDateServico}. As demais escalas do dia estão ocultas pelo filtro ativo.",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                                )
+                if (matchingUserDuties.isNotEmpty()) {
+                    // Cenário A: O usuário pesquisado está escalado neste dia selecionado!
+                    // Igrejas onde o nome pesquisado está escalado
+                    val churchesWhereUserServes = matchingUserDuties.map { it.igreja }.toSet()
+                    // Agrupa TODAS as pessoas da escala dessas igrejas (escala completa)
+                    val fullDutiesByChurch = duties
+                        .filter { churchesWhereUserServes.contains(it.igreja) }
+                        .groupBy { it.igreja }
 
-                                val userDates = userSpecificDates ?: emptySet()
-                                val nextUserDate = userDates.filter { it >= today }.minOrNull() ?: userDates.minOrNull()
-                                if (nextUserDate != null) {
-                                    Button(
-                                        onClick = {
-                                            selectedLocalDate = nextUserDate
-                                            val match = availableDates.firstOrNull { it.localDate == nextUserDate }
-                                            if (match != null) {
-                                                selectedDateServico = match.dataServico
-                                                loadScheduleForDate(match.dataServico)
-                                            }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary,
-                                            contentColor = MaterialTheme.colorScheme.onPrimary
-                                        ),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.CalendarToday,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Ir para escala de $activeUser (${DateUtils.formatarDataExtenso(nextUserDate)})",
-                                            fontSize = 12.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Searched person IS present on this day:
-                    // Group ONLY the churches containing their duties
-                    val churchesWithUser = matchingUserDuties.groupBy { it.igreja }
-
-                    items(churchesWithUser.keys.toList()) { churchName ->
-                        val userPostsInChurch = churchesWithUser[churchName] ?: emptyList()
+                    items(fullDutiesByChurch.keys.toList()) { churchName ->
+                        val churchDuties = fullDutiesByChurch[churchName] ?: emptyList()
                         val isCollapsed = collapsedChurches.contains(churchName)
 
-                        // Rule 2: Past scales lose visual emphasis (opacity 0.65f, neutral border)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -545,7 +525,7 @@ fun EscalaDoDiaScreen(
                                 .background(MaterialTheme.colorScheme.surface)
                                 .border(
                                     1.dp,
-                                    if (isSelectedDatePast) MaterialTheme.colorScheme.outline.copy(alpha = 0.5f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                    if (isSelectedDatePast) MaterialTheme.colorScheme.outline.copy(alpha = 0.5f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                                     RoundedCornerShape(12.dp)
                                 )
                         ) {
@@ -558,7 +538,7 @@ fun EscalaDoDiaScreen(
                                             if (isSelectedDatePast) {
                                                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                             } else {
-                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                                             }
                                         )
                                         .clickable {
@@ -580,25 +560,27 @@ fun EscalaDoDiaScreen(
                                             imageVector = Icons.Default.Place,
                                             contentDescription = null,
                                             tint = if (isSelectedDatePast) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                        Text(
-                                            text = churchName,
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
+                                        Column {
+                                            Text(
+                                                text = churchName,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Escala completa (${churchDuties.size} ${if (churchDuties.size == 1) "integrante" else "integrantes"})",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
 
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Text(
-                                            text = "${userPostsInChurch.size} ${if (userPostsInChurch.size == 1) "posto" else "postos"}",
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
                                         Icon(
                                             imageVector = if (isCollapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
                                             contentDescription = if (isCollapsed) "Expandir" else "Recolher",
@@ -608,37 +590,47 @@ fun EscalaDoDiaScreen(
                                     }
                                 }
 
-                                // Accordion Body: Exclusively show posts of the searched user
+                                // Accordion Body: Exibe a escala COMPLETA com DESTAQUE no nome pesquisado
                                 AnimatedVisibility(visible = !isCollapsed) {
                                     Column {
-                                        userPostsInChurch.forEachIndexed { index, duty ->
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                                        churchDuties.forEachIndexed { index, duty ->
+                                            val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
+
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                                                    .background(
-                                                        if (isSelectedDatePast) {
-                                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                                    .then(
+                                                        if (isPersonHighlighted) {
+                                                            Modifier
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(
+                                                                    if (isSelectedDatePast) {
+                                                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                                                    } else {
+                                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                                                    }
+                                                                )
+                                                                .border(
+                                                                    1.dp,
+                                                                    if (isSelectedDatePast) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+                                                                    RoundedCornerShape(8.dp)
+                                                                )
+                                                                .padding(horizontal = 10.dp, vertical = 9.dp)
                                                         } else {
-                                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                                                        },
-                                                        RoundedCornerShape(8.dp)
-                                                    )
-                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                            Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                                                        }
+                                                    ),
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Column(modifier = Modifier.weight(1f)) {
                                                     Text(
                                                         text = DateUtils.normalizarFuncao(duty.funcao),
-                                                        fontSize = 14.sp,
-                                                        color = if (isSelectedDatePast) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                    Text(
-                                                        text = "Escala de serviço",
-                                                        fontSize = 11.sp,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                                                        fontSize = 13.sp,
+                                                        color = if (isPersonHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        fontWeight = if (isPersonHighlighted) FontWeight.Bold else FontWeight.Medium
                                                     )
                                                 }
 
@@ -649,36 +641,241 @@ fun EscalaDoDiaScreen(
                                                     Text(
                                                         text = duty.pessoa,
                                                         fontSize = 14.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.onSurface
+                                                        fontWeight = if (isPersonHighlighted) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isPersonHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                                     )
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .clip(RoundedCornerShape(4.dp))
-                                                            .background(
-                                                                if (isSelectedDatePast) {
-                                                                    MaterialTheme.colorScheme.outline
-                                                                } else {
-                                                                    MaterialTheme.colorScheme.primary
-                                                                }
+                                                    if (isPersonHighlighted) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .clip(RoundedCornerShape(4.dp))
+                                                                .background(MaterialTheme.colorScheme.primary)
+                                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "Destaque",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.onPrimary
                                                             )
-                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = "Você",
-                                                            fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = Color.White
-                                                        )
+                                                        }
                                                     }
                                                 }
                                             }
 
-                                            if (index < userPostsInChurch.size - 1) {
+                                            if (index < churchDuties.size - 1 && !isPersonHighlighted) {
                                                 HorizontalDivider(
-                                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                                    modifier = Modifier.padding(horizontal = 12.dp)
                                                 )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Cenário B (Fallback - Data sem escala para o nome ou Dia Atual):
+                    // A lista não deve ficar vazia. Ela busca e exibe automaticamente a próxima escala futura.
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("fallback_user_schedule_banner"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarToday,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "$activeUser não possui escala na data selecionada",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Text(
+                                    text = if (isFallbackActive && fallbackLocalDate != null) {
+                                        "Exibindo automaticamente a próxima escala futura em ${DateUtils.formatarDataExtenso(fallbackLocalDate!!)}:"
+                                    } else {
+                                        "Nenhuma próxima escala futura encontrada para $activeUser."
+                                    },
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Se houver próxima escala encontrada no fallback, exibe a escala completa das igrejas onde serve!
+                    val activeFallbackDuties = fallbackDuties ?: emptyList()
+                    val matchingFallback = activeFallbackDuties.filter { SearchUtils.correspondeBusca(it.pessoa, activeUser) }
+
+                    if (matchingFallback.isNotEmpty()) {
+                        val fallbackChurchesWhereUserServes = matchingFallback.map { it.igreja }.toSet()
+                        val fullFallbackDutiesByChurch = activeFallbackDuties
+                            .filter { fallbackChurchesWhereUserServes.contains(it.igreja) }
+                            .groupBy { it.igreja }
+
+                        items(fullFallbackDutiesByChurch.keys.toList()) { churchName ->
+                            val churchDuties = fullFallbackDutiesByChurch[churchName] ?: emptyList()
+                            val isCollapsed = collapsedChurches.contains("fallback_$churchName")
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .border(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                            ) {
+                                Column {
+                                    // Accordion Header
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
+                                            .clickable {
+                                                val key = "fallback_$churchName"
+                                                collapsedChurches = if (isCollapsed) {
+                                                    collapsedChurches - key
+                                                } else {
+                                                    collapsedChurches + key
+                                                }
+                                            }
+                                            .padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Place,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = churchName,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = "Próxima escala (${churchDuties.size} ${if (churchDuties.size == 1) "integrante" else "integrantes"})",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isCollapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                                contentDescription = if (isCollapsed) "Expandir" else "Recolher",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    // Accordion Body: Exibe a escala COMPLETA da igreja com DESTAQUE no nome pesquisado
+                                    AnimatedVisibility(visible = !isCollapsed) {
+                                        Column {
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                                            churchDuties.forEachIndexed { index, duty ->
+                                                val isPersonHighlighted = SearchUtils.correspondeBusca(duty.pessoa, activeUser)
+
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                                        .then(
+                                                            if (isPersonHighlighted) {
+                                                                Modifier
+                                                                    .clip(RoundedCornerShape(8.dp))
+                                                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f))
+                                                                    .border(
+                                                                        1.dp,
+                                                                        MaterialTheme.colorScheme.primary,
+                                                                        RoundedCornerShape(8.dp)
+                                                                    )
+                                                                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                                                            } else {
+                                                                Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                                                            }
+                                                        ),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = DateUtils.normalizarFuncao(duty.funcao),
+                                                            fontSize = 13.sp,
+                                                            color = if (isPersonHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            fontWeight = if (isPersonHighlighted) FontWeight.Bold else FontWeight.Medium
+                                                        )
+                                                    }
+
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = duty.pessoa,
+                                                            fontSize = 14.sp,
+                                                            fontWeight = if (isPersonHighlighted) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isPersonHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                        if (isPersonHighlighted) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(4.dp))
+                                                                    .background(MaterialTheme.colorScheme.primary)
+                                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                            ) {
+                                                                Text(
+                                                                    text = "Destaque",
+                                                                    fontSize = 10.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = MaterialTheme.colorScheme.onPrimary
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                if (index < churchDuties.size - 1 && !isPersonHighlighted) {
+                                                    HorizontalDivider(
+                                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }

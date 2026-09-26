@@ -1,6 +1,7 @@
 package com.aistudio.escala.ui.components
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -109,8 +110,9 @@ fun ImportarEscalaCard(
                     editedPeriodo = result.periodo
                     isProcessing = false
                 } catch (e: Exception) {
+                    Log.e("ImportarEscalaSheet", "Falha interna ao processar documento", e)
                     isProcessing = false
-                    errorMessage = e.message ?: "Não foi possível processar o arquivo. Verifique o formato."
+                    errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
                 }
             }
         }
@@ -132,8 +134,9 @@ fun ImportarEscalaCard(
                     editedPeriodo = result.periodo
                     isProcessing = false
                 } catch (e: Exception) {
+                    Log.e("ImportarEscalaSheet", "Falha interna ao processar documento via fallback picker", e)
                     isProcessing = false
-                    errorMessage = e.message ?: "Não foi possível processar o arquivo. Verifique o formato."
+                    errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
                 }
             }
         }
@@ -383,7 +386,8 @@ fun ImportarEscalaCard(
                             onImportSuccess(result.periodo)
                         }
                         is ImportResult.Error -> {
-                            errorMessage = result.message
+                            Log.e("ImportarEscalaSheet", "Erro ao gravar escala no banco: ${result.message}")
+                            errorMessage = "Não foi possível importar o arquivo. Verifique o formato e tente novamente."
                             successResult = null
                         }
                     }

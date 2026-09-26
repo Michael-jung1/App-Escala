@@ -31,6 +31,35 @@ class EscalaRepository(context: Context) {
         dbHelper.autenticarCoordenador(chaveAcesso)
     }
 
+    suspend fun validarSenha(chaveAcesso: String): Pair<Boolean, Boolean> = withContext(Dispatchers.IO) {
+        val res = dbHelper.validarSenhaCoordenador(chaveAcesso)
+        Pair(res.isValid, res.isAdmin)
+    }
+
+    suspend fun validarSenhaResult(chaveAcesso: String): ValidacaoSenhaResult = withContext(Dispatchers.IO) {
+        dbHelper.validarSenhaCoordenador(chaveAcesso)
+    }
+
+    suspend fun getSenhaCoordenador(): String = withContext(Dispatchers.IO) {
+        dbHelper.obterSenhaCoordenador()
+    }
+
+    suspend fun getCoordenadoresAcessos(): List<Coordenador> = withContext(Dispatchers.IO) {
+        dbHelper.listarTodosCoordenadores()
+    }
+
+    suspend fun salvarCoordenadorAcesso(nome: String, chave: String, isAdmin: Boolean): Boolean = withContext(Dispatchers.IO) {
+        dbHelper.salvarCoordenadorAcesso(nome, chave, isAdmin)
+    }
+
+    suspend fun atualizarCoordenadorAcesso(id: Long, nome: String, chave: String, isAdmin: Boolean): Boolean = withContext(Dispatchers.IO) {
+        dbHelper.atualizarCoordenadorAcesso(id, nome, chave, isAdmin)
+    }
+
+    suspend fun excluirCoordenadorAcesso(id: Long): Boolean = withContext(Dispatchers.IO) {
+        dbHelper.excluirCoordenadorAcesso(id)
+    }
+
     suspend fun getPostosDaIgreja(igrejaId: Long, apenasFuturas: Boolean): List<DiaComPostos> = withContext(Dispatchers.IO) {
         dbHelper.listarPostosDaIgreja(igrejaId, apenasFuturas)
     }

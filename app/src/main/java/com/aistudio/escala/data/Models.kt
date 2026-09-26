@@ -49,7 +49,13 @@ data class Coordenador(
     val id: Long,
     val nome: String,
     val chaveAcesso: String,
-    val igrejas: List<Igreja>
+    val igrejas: List<Igreja>,
+    val isAdmin: Boolean = false
+)
+
+data class ValidacaoSenhaResult(
+    val isValid: Boolean,
+    val isAdmin: Boolean
 )
 
 data class ParsedEscala(
